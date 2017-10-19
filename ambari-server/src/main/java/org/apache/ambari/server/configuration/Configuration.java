@@ -735,15 +735,6 @@ public class Configuration {
       "java.home", null);
 
   /**
-   * The location of the JDK on the Power Ambari Agent hosts.
-   */
-  @Markdown(
-      description = "The location of the JDK on the Power Ambari Agent hosts.",
-      examples = { "/usr/jdk64/jdk1.7.0_45.ppc64le" })
-  public static final ConfigurationProperty<String> JAVA_HOME_PPC = new ConfigurationProperty<>(
-      "java.home.ppc", null);
-
-  /**
    * The name of the JDK installation binary.
    */
   @Markdown(
@@ -2962,7 +2953,6 @@ public class Configuration {
     agentConfigsMap.put(CHECK_MOUNTS_TIMEOUT.getKey(), getProperty(CHECK_MOUNTS_TIMEOUT));
     agentConfigsMap.put(ENABLE_AUTO_AGENT_CACHE_UPDATE.getKey(), getProperty(ENABLE_AUTO_AGENT_CACHE_UPDATE));
     agentConfigsMap.put(JAVA_HOME.getKey(), getProperty(JAVA_HOME));
-    agentConfigsMap.put(JAVA_HOME_PPC.getKey(), getProperty(JAVA_HOME_PPC));
 
     configsMap = new HashMap<>();
     configsMap.putAll(agentConfigsMap);
@@ -2997,7 +2987,6 @@ public class Configuration {
     configsMap.put(CLIENT_API_SSL_TSTR_TYPE.getKey(), getProperty(CLIENT_API_SSL_TSTR_TYPE));
     configsMap.put(CLIENT_API_SSL_CRT_PASS_FILE_NAME.getKey(), getProperty(CLIENT_API_SSL_CRT_PASS_FILE_NAME));
     configsMap.put(JAVA_HOME.getKey(), getProperty(JAVA_HOME));
-    configsMap.put(JAVA_HOME_PPC.getKey(), getProperty(JAVA_HOME_PPC));
     configsMap.put(PARALLEL_STAGE_EXECUTION.getKey(), getProperty(PARALLEL_STAGE_EXECUTION));
     configsMap.put(SERVER_TMP_DIR.getKey(), getProperty(SERVER_TMP_DIR));
     configsMap.put(LOG4JMONITOR_DELAY.getKey(), getProperty(LOG4JMONITOR_DELAY));
@@ -3079,6 +3068,24 @@ public class Configuration {
    */
   public String getProperty(String key) {
     return properties.getProperty(key);
+  }
+
+  /**
+   * Get the property value for the given key.
+   * If not found reload the properties
+   *
+   * @return the property value
+   */
+  public String getPropertyForced(String key) {
+    String returnValue = properties.getProperty(key);
+    if (returnValue == null) {
+      Properties properties = readConfigFile();
+      returnValue = properties.getProperty(key);
+      if (returnValue != null) {
+        this.properties = properties;
+      }
+    }
+    return returnValue;
   }
 
   /**
@@ -4052,10 +4059,6 @@ public class Configuration {
 
   public String getJavaHome() {
     return getProperty(JAVA_HOME);
-  }
-
-  public String getJavaHomePpc() {
-    return getProperty(JAVA_HOME_PPC);
   }
 
   public String getJDKName() {

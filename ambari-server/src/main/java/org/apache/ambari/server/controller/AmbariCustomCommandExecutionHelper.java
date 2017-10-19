@@ -427,6 +427,17 @@ public class AmbariCustomCommandExecutionHelper {
       String notManagedHdfsPathList = gson.toJson(notManagedHdfsPathSet);
       hostLevelParams.put(NOT_MANAGED_HDFS_PATH_LIST, notManagedHdfsPathList);
 
+      //java home check for upgrade
+      String osArch = host.getOsArch();
+      String javaHomeValue = null;
+      if (osArch.startsWith("ppc")) {
+        String key = "java.home.ppc";
+        javaHomeValue = configs.getPropertyForced(key);
+      } else {
+        javaHomeValue = configs.getJavaHome();
+      }
+      hostLevelParams.put(JAVA_HOME, javaHomeValue);
+
       execCmd.setHostLevelParams(hostLevelParams);
 
       Map<String, String> commandParams = new TreeMap<>();
@@ -705,13 +716,15 @@ public class AmbariCustomCommandExecutionHelper {
     ExecutionCommand execCmd = stage.getExecutionCommandWrapper(hostname,
         smokeTestRole).getExecutionCommand();
     
-    Configuration configuration = new Configuration();
-		String osArch = cluster.getHost(hostname).getOsArch();
+    String osArch = cluster.getHost(hostname).getOsArch();
+    String javaHomeValue = null;
 		if (osArch.startsWith("ppc")) {
-			execCmd.getHostLevelParams().put(JAVA_HOME, configuration.getJavaHomePpc());
+      String key = "java.home.ppc";
+      javaHomeValue = configs.getPropertyForced(key);
 		} else {
-			execCmd.getHostLevelParams().put(JAVA_HOME, configuration.getJavaHome());
+			javaHomeValue = configs.getJavaHome();
 		}
+		execCmd.getHostLevelParams().put(JAVA_HOME, javaHomeValue);
 
     // if the command should fetch brand new configuration tags before
     // execution, then we don't need to fetch them now

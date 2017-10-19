@@ -451,15 +451,16 @@ public class AmbariActionExecutionHelper {
 
       Map<String, String> hostLevelParams = execCmd.getHostLevelParams();
 
-      Configuration configuration = new Configuration(); 
       String osArch = clusters.getHost(hostName).getOsArch();
+      String javaHomeValue = null;
       if (osArch.startsWith("ppc")) {
-        commandParams.put(JAVA_HOME, configuration.getJavaHomePpc());
-        hostLevelParams.put(JAVA_HOME, configuration.getJavaHomePpc());
+        String key = "java.home.ppc";
+        javaHomeValue = configs.getPropertyForced(key);
       } else {
-        commandParams.put(JAVA_HOME, configuration.getJavaHome());
-        hostLevelParams.put(JAVA_HOME, configuration.getJavaHome());
+        javaHomeValue = configs.getJavaHome();
       }
+      commandParams.put(JAVA_HOME, javaHomeValue);
+      hostLevelParams.put(JAVA_HOME, javaHomeValue);
       
       hostLevelParams.put(AGENT_STACK_RETRY_ON_UNAVAILABILITY, configs.isAgentStackRetryOnInstallEnabled());
       hostLevelParams.put(AGENT_STACK_RETRY_COUNT, configs.getAgentStackRetryOnInstallCount());

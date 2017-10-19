@@ -2580,14 +2580,15 @@ public class AmbariManagementControllerImpl implements AmbariManagementControlle
     // Set/update the unlimited_key_jce_required value as needed
     hostParams.put(UNLIMITED_KEY_JCE_REQUIRED, (unlimitedKeyJCEPolicyRequired) ? "true" : "false");
 
-    Configuration configuration = new Configuration();
     String osArch = host.getOsArch();
-		if (osArch.startsWith("ppc")) {
-			hostParams.put(JAVA_HOME, configuration.getJavaHomePpc());
-		} else {
-			hostParams.put(JAVA_HOME, configuration.getJavaHome());
-		}
-
+    String javaHomeValue = null;
+    if (osArch.startsWith("ppc")) {
+      String key = "java.home.ppc";
+      javaHomeValue = configs.getPropertyForced(key);
+    } else {
+      javaHomeValue= configs.getJavaHome();
+    }
+    hostParams.put(JAVA_HOME, javaHomeValue);
     execCmd.setHostLevelParams(hostParams);
 
     Map<String, String> roleParams = new TreeMap<>();
