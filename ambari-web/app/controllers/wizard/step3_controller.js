@@ -75,14 +75,19 @@ App.WizardStep3Controller = Em.Controller.extend(App.ReloadPopupMixin, {
 
   requestId: 0,
 
-ppcList: [],
-ppcJavaNameError: "",
-jsonHostData: [],
-isJavaPpcEntered: true,
-ppcUiHostname: null,
+  ppcList: [],
+  ppcJavaNameError: "",
+  jsonHostData: [],
+  ppcUiHostname: null,
 
-ppcUiJavaHome: null,
-hasJavaPpcError: false,
+  ppcUiJavaHome: null,
+  hasJavaPpcError: false,
+  isPublicRepo: true,
+  allRepos: [],
+  newReposBaseURL: {},
+  localRepoVersion: null,
+
+  networkIssuesExist: Em.computed.everyBy('content.stacks', 'stackDefault', true),
 
   /**
    * Timeout for registration
@@ -214,7 +219,7 @@ hasJavaPpcError: false,
     return (App.get('testMode')) ? true : !this.get('isRegistrationInProgress');
   }.property('isRegistrationInProgress'),
 
-  isNextButtonDisabled: Em.computed.or('App.router.btnClickInProgress', 'isSubmitDisabled'),
+  isNextButtonDisabled: Em.computed.or('App.router.btnClickInProgress', 'isSubmitDisabled', 'invalidFormatUrlExist'),
 
   isBackButtonDisabled: Em.computed.or('App.router.btnClickInProgress', 'isBackDisabled'),
 
@@ -292,6 +297,7 @@ hasJavaPpcError: false,
         'user': this.get('content.installOptions.sshUser'),
         'sshPort': this.get('content.installOptions.sshPort'),
         'ppcJavaHome': "null",
+        'ambariRepoUrls': "null",
         'userRunAs': App.get('supports.customizeAgentUserAccount') ? this.get('content.installOptions.agentUser') : 'root'
     });
     App.router.get(this.get('content.controllerName')).launchBootstrap(bootStrapData, function (requestId) {
@@ -393,9 +399,33 @@ hasJavaPpcError: false,
    */
   removeHosts: function (hosts) {
     var self = this;
-    return App.showConfirmationPopup(function () {
+    return App.showConfirmationPopup(function() {
       App.router.send('removeHosts', hosts);
       self.hosts.removeObjects(hosts);
+      hosts.forEach(function(_host) {
+        var ambariIndex = self.newAmbariOsTypeHosts.indexOf(_host.name);
+        if (ambariIndex != -1) {
+          self.newAmbariOsTypeHosts.removeAt(ambariIndex);
+        }
+        var hostIndex = self.hosts.findIndex(allHosts => allHosts.os_type === _host.os_type);
+        if (hostIndex >= 0) {
+          return;
+        }
+        var index = self.newSupportedOsList.findIndex(os => os.os_type === _host.os_type);
+        if (index >= 0) {
+          self.newSupportedOsList.removeAt(index);
+        }
+        var ambariOsTypeIndex = self.newAmbariOsTypes.findIndex(diffOs => diffOs.os_type === _host.os_type);
+        if (ambariOsTypeIndex != -1) {
+          self.newAmbariOsTypes.removeAt(ambariOsTypeIndex);
+        }
+      }, self);
+      if (self.newSupportedOsList.length <= 0) {
+        self.set('promptRepoInfo', false);
+      }
+      if (!self.newAmbariOsTypes.length) {
+        self.set('promptAmbariRepoUrl', false);
+      }
       self.stopRegistration();
       if (!self.hosts.length) {
         self.set('isSubmitDisabled', true);
@@ -428,23 +458,23 @@ hasJavaPpcError: false,
    * @return App.ModalPopup
    * @method selectedHostsPopup
    */
-  selectedHostsPopup: function () {
+  selectedHostsPopup : function() {
     var selectedHosts = this.get('hosts').filterProperty('isChecked').mapProperty('name');
     return App.ModalPopup.show({
-      header: Em.I18n.t('installer.step3.selectedHosts.popup.header'),
-      secondary: null,
-      bodyClass: Em.View.extend({
-        templateName: require('templates/common/items_list_popup'),
-        items: selectedHosts,
-        insertedItems: [],
-        didInsertElement: function () {
+      header : Em.I18n.t('installer.step3.selectedHosts.popup.header'),
+      secondary : null,
+      bodyClass : Em.View.extend({
+        templateName : require('templates/common/items_list_popup'),
+        items : selectedHosts,
+        insertedItems : [],
+        didInsertElement : function() {
           lazyloading.run({
-            destination: this.get('insertedItems'),
-            source: this.get('items'),
-            context: this,
-            initSize: 100,
-            chunkSize: 500,
-            delay: 100
+            destination : this.get('insertedItems'),
+            source : this.get('items'),
+            context : this,
+            initSize : 100,
+            chunkSize : 500,
+            delay : 100
           });
         }
       })
@@ -474,6 +504,7 @@ hasJavaPpcError: false,
         'user': this.get('content.installOptions.sshUser'),
         'sshPort': this.get('content.installOptions.sshPort'),
         'ppcJavaHome': "null",
+        'ambariRepoUrls': "null",
         'userRunAs': App.get('supports.customizeAgentUserAccount') ? this.get('content.installOptions.agentUser') : 'root'
       });
     this.set('numPolls', 0);
@@ -515,7 +546,10 @@ hasJavaPpcError: false,
     this.set('numPolls', 0);
     this.set('registrationStartedAt', null);
     this.set('bootHosts', this.get('hosts'));
-    this.doBootstrap();
+    var self = this;
+    this.getHostOsInfo().done(function(){
+      self.doBootstrap();
+    });
   },
 
   /**
@@ -597,12 +631,12 @@ hasJavaPpcError: false,
    * @param {object} data
    * @method doBootstrapSuccessCallback
    */
-  doBootstrapSuccessCallback: function (data) {
+  doBootstrapSuccessCallback : function(data) {
     var self = this;
     var pollingInterval = 3000;
     this.reloadSuccessCallback();
     if (Em.isNone(data.hostsStatus)) {
-      window.setTimeout(function () {
+      window.setTimeout(function() {
         self.doBootstrap()
       }, pollingInterval);
     } else {
@@ -613,18 +647,39 @@ hasJavaPpcError: false,
       }
       var keepPolling = this.parseHostInfo(data.hostsStatus);
 
-      // Single host : if the only hostname is invalid (data.status == 'ERROR')
+      // Single host : if the only hostname is invalid (data.status =='ERROR')
       // Multiple hosts : if one or more hostnames are invalid
       // following check will mark the bootStatus as 'FAILED' for the invalid hostname
       var installedHosts = App.Host.find().mapProperty('hostName');
       var isErrorStatus = data.status == 'ERROR';
       this.set('isBootstrapFailed', isErrorStatus);
+
+      // check for prompting ambari repo url
+      this.set('newAmbariOsTypes', []);
+      this.set('newAmbariOsTypeHosts', []);
+      this.set('promptAmbariRepoUrl', false);
+      if(!keepPolling && data.hostsStatus.someProperty('statusCode', "404")){
+        data.hostsStatus.forEach(function(host) {
+          if(host.statusCode == 404){
+            if (!this.newAmbariOsTypeHosts.contains(host.hostName)) {
+              this.newAmbariOsTypeHosts.push(host.hostName);
+            }
+            var warnedHost = this.jsonHostData.items.findProperty('Hosts.host_name', host.hostName);
+            if(!this.newAmbariOsTypes.someProperty('os_type',warnedHost.Hosts.os_type)){
+              this.newAmbariOsTypes.push({
+                'os_type' : warnedHost.Hosts.os_type,
+                'ambari_repo' : "",
+                'ambariRepoUIError' : "",
+                'hasError' : false
+                });
+              }
+            }
+          },this);
+        this.set('promptAmbariRepoUrl',true);
+      }
       if (isErrorStatus || data.hostsStatus.mapProperty('hostName').removeObjects(installedHosts).length != this.get('bootHosts').length) {
-
         var hosts = this.get('bootHosts');
-
         for (var i = 0; i < hosts.length; i++) {
-
           var isValidHost = data.hostsStatus.someProperty('hostName', hosts[i].get('name'));
           if (hosts[i].get('bootStatus') !== 'REGISTERED') {
             if (!isValidHost) {
@@ -634,17 +689,93 @@ hasJavaPpcError: false,
           }
         }
       }
-
       if (isErrorStatus || data.hostsStatus.someProperty('status', 'DONE') || data.hostsStatus.someProperty('status', 'FAILED')) {
         // kicking off registration polls after at least one host has succeeded
         this.startRegistration();
       }
       if (keepPolling) {
-        window.setTimeout(function () {
+        window.setTimeout(function() {
           self.doBootstrap()
         }, pollingInterval);
       }
     }
+  },
+
+  // ambari repo ui changes
+  checkAmbariRepoUI : function() {
+    this.newAmbariOsTypes.forEach(
+      function(obj) {
+        var ambariRepoFromUI = obj.ambari_repo;
+        if (ambariRepoFromUI == '' || ambariRepoFromUI == null) {
+          Em.set(obj, 'ambariRepoUIError', Em.I18n.t('installer.step3.ambariRepoUIError.nullError'));
+          Em.set(obj, 'hasError', true);
+        }
+        if (/\s/.test(ambariRepoFromUI)) {
+          Em.set(obj,'ambariRepoUIError',Em.I18n.t('installer.step3.ambariRepoUIError.stringError'));
+          Em.set(obj, 'hasError', true);
+        }
+        var regex = /(http|https):\/\/(\w+:{0,1}\w*)?(\S+)(:[0-9]+)?(\/|\/([\w#!:.?+=&%!\-\/]))?/;
+        if (!regex.test(ambariRepoFromUI)) {
+          Em.set(obj,'ambariRepoUIError',Em.I18n.t('installer.step3.ambariRepoUIError.stringError'));
+          Em.set(obj, 'hasError', true);
+        }
+      }, this);
+    if (this.newAmbariOsTypes.someProperty('hasError', true)) {
+      return true;
+    } else {
+      this.set('ambariRepoUIError', "");
+      return false;
+    }
+  },
+
+  getAmbariRepoUrlInfo : function() {
+    this.newAmbariOsTypes.setEach('hasError',false);
+    this.newAmbariOsTypes.setEach('ambariRepoUIError',"");
+    if (!this.checkAmbariRepoUI()) {
+      this.bootstrapWithAmbariRepoUrl();
+    }
+  },
+
+  bootstrapWithAmbariRepoUrl : function() {
+    var self = this;
+    this.set('promptAmbariRepoUrl', false);
+    var bootStrapData = JSON.stringify({
+      'verbose' : true,
+      'sshKey' : this.get('content.installOptions.sshKey'),
+      'hosts' : this.newAmbariOsTypeHosts,
+      'user' : this.get('content.installOptions.sshUser'),
+      'sshPort' : this.get('content.installOptions.sshPort'),
+      'userRunAs' : App.get('supports.customizeAgentUserAccount') ? this.get('content.installOptions.agentUser') : 'root',
+      'ppcJavaHome' : "null",
+      'ambariRepoUrls' : JSON.stringify(this.newAmbariOsTypes)
+    });
+    this.set('numPolls', 0);
+    this.set('registrationStartedAt', null);
+    this.set('isHostsWarningsLoaded', false);
+    this.set('stopChecking', false);
+    this.set('isSubmitDisabled', true);
+    var selectedHosts = this.get('bootHosts');
+    selectedHosts.forEach(function(_host) {
+      var bootHostName = _host.get('name');
+      for (var i = 0; i < this.newAmbariOsTypeHosts.length; i++) {
+        if (this.newAmbariOsTypeHosts[i] == bootHostName) {
+          _host.set('bootStatus', 'DONE');
+          _host.set('bootLog', 'Retrying ...');
+        }
+      }
+    }, this);
+
+    App.router.get(this.get('content.controllerName'))
+      .launchBootstrap(bootStrapData, function(requestId) {
+        if (requestId == '0') {
+          self.startBootstrap();
+        } else if (requestId) {
+          self.set('content.installOptions.bootRequestId', requestId);
+          App.router.get(self.get('content.controllerName'))
+          .save('installOptions');
+          self.startBootstrap();
+        }
+      });
   },
 
   /**
@@ -852,7 +983,7 @@ hasJavaPpcError: false,
       data: {
         host_names: hostsNames,
         java_home_x86: javaHomex86,
-	java_home_ppc: javaHomePpc,
+        java_home_ppc: javaHomePpc,
         jdk_location: jdkLocation
       },
       success: 'doCheckJDKsuccessCallback',
@@ -878,96 +1009,101 @@ hasJavaPpcError: false,
       this.set('isJDKWarningsLoaded', true);
     }
   },
+
   doCheckJDKerrorCallback: function () {
     this.set('isJDKWarningsLoaded', true);
   },
 
-    ppcInvalidJavaName: function() {
-       this.ppcUiJavaHome = document.getElementById('java.home').value;
-        //this.ppcUiJavaHome = this.get('ppcjavaname');
-        console.log("Entered ppcInvalidJavaName ", this.ppcUiJavaHome);
-        if(this.ppcUiJavaHome == '' || this.ppcUiJavaHome == null){
-	  this.set('ppcJavaNameError',Em.I18n.t('installer.step3.ppcJavaName.error'));
-          return true;
-	}
-        else if (/\s/.test(this.ppcUiJavaHome)) {
-          this.set('ppcJavaNameError', Em.I18n.t('installer.step3.ppcJavaName.error'));
-          return true;
-        }
-	else {
-	  this.set('ppcJavaNameError',"");
-          return false;
-	}		  
-    },
-    
-    
-    isJavaPpcEntered: false,
+  ppcInvalidJavaName: function() {
+    // this.ppcUiJavaHome = document.getElementById('java.home').value;
+    this.ppcUiJavaHome = this.get('uiJavaHomePpc');
+    console.log("Entered ppcInvalidJavaName ", this.ppcUiJavaHome);
+    if(this.ppcUiJavaHome == '' || this.ppcUiJavaHome == null){
+      this.set('ppcJavaNameError',Em.I18n.t('installer.step3.ppcJavaName.error'));
+      return true;
+    } else if (/\s/.test(this.ppcUiJavaHome)) {
+      this.set('ppcJavaNameError', Em.I18n.t('installer.step3.ppcJavaName.error'));
+      return true;
+    } else {
+      this.set('ppcJavaNameError',"");
+      return false;
+    }
+  },
 
-    getPpcJavaHomeInfo: function() {
-        if (!this.ppcInvalidJavaName()) {
-            console.log("PRINT DATA FROM USER FOR PPC JAVA_HOME", this.ppcUiJavaHome, this.ppcList);
-            this.validateJavaPpc(this.ppcList, this.ppcUiJavaHome);
-        }
-    },
+  getPpcJavaHomeInfo: function() {
+    if (!this.ppcInvalidJavaName()) {
+      console.log("PRINT DATA FROM USER FOR PPC JAVA_HOME", this.ppcUiJavaHome, this.ppcList);
+      this.validateJavaPpc(this.ppcList, this.ppcUiJavaHome);
+    }
+  },
 
-    validateJavaPpc: function(ppcHosts, ppcJavaHome) {
-	    var self = this;
-            this.set('hasJavaPpcError',false); 
-	    var bootStrapData = JSON.stringify({
-	        'verbose': true,
-	        'sshKey': this.get('content.installOptions.sshKey'),
-	        'hosts': ppcHosts,
-	        'user': this.get('content.installOptions.sshUser'),
-	        'sshPort': this.get('content.installOptions.sshPort'),
-	        'userRunAs': App.get('supports.customizeAgentUserAccount') ? this.get('content.installOptions.agentUser') : 'root',
-	        'ppcJavaHome': ppcJavaHome
-	    });
-	    this.set('numPolls', 0);
-	    this.set('registrationStartedAt', null);
-	    this.set('isHostsWarningsLoaded', false);
-	    this.set('stopChecking', false);
-	    this.set('isSubmitDisabled', true);
-	    var selectedHosts = this.get('bootHosts');
-	    selectedHosts.forEach(function (_host) {
-	    	bootHostName = _host.get('name');
-	    	for (var i = 0; i < ppcHosts.length; i++) {
-		    	if (ppcHosts[i] == bootHostName) {
-		    		_host.set('bootStatus', 'DONE');
-		    		_host.set('bootLog', 'Retrying ...');
-		    	}
-	    	}
-	    }, this);
-	      
-	    App.router.get(this.get('content.controllerName')).launchBootstrap(bootStrapData, function(requestId) {
-	        if (requestId == '0') {
-	            self.startBootstrap();
-	        } else if (requestId) {
-	            self.set('content.installOptions.bootRequestId', requestId);
-	            App.router.get(self.get('content.controllerName')).save('installOptions');
-	            self.startBootstrap();
-	        }
-	    });
-        console.log("Done boostrap");
-	}, 
-	isPpcSuccessCallback: function (jsonData) {
-	  this.jsonHostData = jsonData;
-	 },
-	 isPpcErrorCallback: function (){
-		 console.log(" isPpcErrorCallback ");
-	 },
-	getHostPpcInfo: function () {
-		this.set('isHostsWarningsLoaded', false);
-		return App.ajax.send({
-			name: 'wizard.step3.host_info',
-			sender: this,
-			success: 'isPpcSuccessCallback',
-			error: 'isPpcErrorCallback'
-		});	
-	},
+  validateJavaPpc: function(ppcHosts, ppcJavaHome) {
+    var self = this;
+    this.set('hasJavaPpcError',false);
+    var bootStrapData = JSON.stringify({
+        'verbose': true,
+        'sshKey': this.get('content.installOptions.sshKey'),
+        'hosts': ppcHosts,
+        'user': this.get('content.installOptions.sshUser'),
+        'sshPort': this.get('content.installOptions.sshPort'),
+        'userRunAs': App.get('supports.customizeAgentUserAccount') ? this.get('content.installOptions.agentUser') : 'root',
+        'ppcJavaHome': ppcJavaHome,
+        'ambariRepoUrls': "null"
+    });
+    this.set('numPolls', 0);
+    this.set('registrationStartedAt', null);
+    this.set('isHostsWarningsLoaded', false);
+    this.set('stopChecking', false);
+    this.set('isSubmitDisabled', true);
+    var selectedHosts = this.get('bootHosts');
+    selectedHosts.forEach(function (_host) {
+      bootHostName = _host.get('name');
+      for (var i = 0; i < ppcHosts.length; i++) {
+        if (ppcHosts[i] == bootHostName) {
+          _host.set('bootStatus', 'DONE');
+          _host.set('bootLog', 'Retrying ...');
+        }
+      }
+    }, this);
+    
+    App.router.get(this.get('content.controllerName')).launchBootstrap(bootStrapData, function(requestId) {
+      if (requestId == '0') {
+          self.startBootstrap();
+      } else if (requestId) {
+          self.set('content.installOptions.bootRequestId', requestId);
+          App.router.get(self.get('content.controllerName')).save('installOptions');
+          self.startBootstrap();
+      }
+    });
+  },
+
+  getHostOsInfo : function() {
+    this.set('isHostsWarningsLoaded', false);
+    var dfd = $.Deferred();
+    App.ajax.send({
+      name : 'wizard.step3.host_info',
+      sender : this,
+      data : {
+        dfd : dfd
+      },
+      success : 'isPpcSuccessCallback',
+      error : 'isPpcErrorCallback'
+    });
+    return dfd.promise();
+  },
+
+  isPpcSuccessCallback : function(data, opt, params) {
+    this.jsonHostData = data;
+    params.dfd.resolve();
+  },
+
+  isPpcErrorCallback : function(request, ajaxOptions, error, opt, params) {
+    console.log(" isPpcErrorCallback ");
+    params.dfd.reject();
+  },
 
   parseJDKCheckResults: function (data) {
     var jdkWarnings = [], hostsJDKContext = [], hostsJDKNames = [], hostsJDKNamesPpc = [], hostsJDKContextPpc = [];
-    this.getHostPpcInfo();
     var tmp_jsonHostData = this.jsonHostData;
     // check if the request ended
     if (data.Requests.end_time > 0 && data.tasks) {
@@ -1002,13 +1138,12 @@ hasJavaPpcError: false,
       }
       if (hostsJDKContextPpc.length > 0) { // java jdk warning for ppc exist
         var invalidJavaHomePpc = "";
-		if (this.get('javaHomePpc') == "" || this.get('javaHomePpc') == "null"){
-			invalidJavaHomePpc = "Java Home path is not available for PPC";
-			}
-		else{
-//		    invalidJavaHomePpc = Em.I18n.t('installer.step3.hostWarningsPopup.jdk.name').format(this.get('javaHomePpc'));
-		    invalidJavaHomePpc = "Java Home path not valid";
-		}
+    if (this.get('javaHomePpc') == "" || this.get('javaHomePpc') == "null"){
+      invalidJavaHomePpc = "Java Home path is not available for PPC";
+      }
+    else{
+        invalidJavaHomePpc = "Java Home path not valid";
+    }
         jdkWarnings.push({
           name: invalidJavaHomePpc,
           hosts: hostsJDKContextPpc,
@@ -1067,15 +1202,622 @@ hasJavaPpcError: false,
     });
   },
 
-
-  startHostcheck: function(hosts) {
+  startHostcheck : function(hosts) {
     if (!hosts.everyProperty('bootStatus', 'FAILED')) {
       this.set('isWarningsLoaded', false);
       this.getHostNameResolution();
       this.checkHostJDK();
+      this.doCheckRepoInfo();
     } else {
       this.stopHostCheck();
     }
+  },
+
+  doCheckRepoInfo : function() {
+    var isInstaller = this.get('content.controllerName') == 'installerController';
+    if (isInstaller) {
+      // Test redhatSatellite server(installer)
+      if (App.Stack.find().findProperty('isSelected', true).get('useRedhatSatellite') == true) {
+        this.set('promptRepoInfo', false);
+        return;
+      }
+      this.generateAllReposForInstaller();
+    } else {
+      // Test redhatSatellite server(add host) - case 1
+      if (App.StackVersion.find().get('content.length') == 0) {
+        this.set('promptRepoInfo', false);
+        return;
+      }
+    }
+
+    var self = this;
+    this.getSupportedOSList().done(function(data) {
+      if (!isInstaller) {
+        self.loadRepoInfo().done(function(isAmbariManagedRepositories){
+          if(isAmbariManagedRepositories){
+            self.checkRepoForNewOsType(data);
+          }
+        });
+      }else{
+        self.checkRepoForNewOsType(data);
+      }
+    }, this);
+  },
+
+  /**
+   * Generate all repos for Installer Flow
+   *
+   * @param {Object{}}
+   *          oses - OS array
+   * @returns {Em.Object[]}
+   */
+  generateAllReposForInstaller: function() {
+	  var selectedStack = App.Stack.find().findProperty('isSelected');
+      if (selectedStack && selectedStack.get('operatingSystems')) {
+        selectedStack.get('operatingSystems').forEach(function(os) {
+          if (os.get('isSelected')) {
+            os.get('repositories').forEach(function(repo) {
+              this.allRepos.push(Em.Object.create({
+                base_url : repo.get('baseUrl'),
+                os_type : repo.get('osType'),
+                repo_id : repo.get('repoId')
+              }));
+            }, this);
+          }
+        }, this);
+      }
+  },
+
+   /**
+   * Load repo info for add Service/Host wizard review page
+   *
+   * @return {$.ajax|null}
+   * @method loadRepoInfo
+   */
+  loadRepoInfo: function() {
+    var stackName = App.get('currentStackName');
+    var currentStackVersionNumber = App.get('currentStackVersionNumber');
+    var currentStackVersion = App.StackVersion.find().filterProperty('stack', stackName).findProperty('version', currentStackVersionNumber);
+    var currentRepoVersion = currentStackVersion.get('repositoryVersion.repositoryVersion');
+    var currentRepoVersionId = currentStackVersion.get('repositoryVersion.id');
+    var dfd = $.Deferred();
+    App.ajax.send({
+      name: 'cluster.load_repo_version',
+      //name: 'wizard.step1.get_repo_version_by_id',
+      sender: this,
+      data: {
+          stackName: stackName,
+          repositoryVersion: currentRepoVersion,
+          repositoryVersionId: currentRepoVersionId,
+          dfd: dfd
+      },
+      success: 'loadRepoInfoSuccessCallback',
+      error: 'loadRepoInfoErrorCallback'
+    });
+    return dfd.promise();
+  },
+
+  /**
+   * Save all repo base URL of all OS type to <code>repoInfo<code>
+   * @param {object} data
+   * @method loadRepoInfoSuccessCallback
+   */
+  loadRepoInfoSuccessCallback : function(data, opt, params) {
+    var isAmbariManagedRepositories = true;
+    if (data.items.length) {
+      data.items[0].repository_versions.forEach(function(repo_version){
+        if (repo_version.RepositoryVersions.id == params.repositoryVersionId) {
+          // Test redhatSatellite server(add host) -case 2
+          if (repo_version.operating_systems[0].OperatingSystems.ambari_managed_repositories) {
+            this.localRepoVersion = repo_version;
+            this.allRepos = this.generateAllReposForAddhost(Em.getWithDefault(repo_version, 'operating_systems', []));
+            isAmbariManagedRepositories = true;
+          } else {
+            this.set('promptRepoInfo', false);
+            isAmbariManagedRepositories = false;
+          }
+        }
+      },this);
+    } else {
+      this.loadDefaultRepoInfo();
+    }
+    params.dfd.resolve(isAmbariManagedRepositories);
+  },
+
+  /**
+   * Generate all repos for Add Host Flow
+   *
+   * @param oses array of operating systems json
+   * @returns all selected oses
+   */
+  generateAllReposForAddhost: function(oses) {
+    return oses.map(function(os) {
+      return os.repositories.map(function(repository) {
+        return Em.Object.create({
+          base_url: repository.Repositories.base_url,
+          os_type: repository.Repositories.os_type,
+          repo_id: repository.Repositories.repo_id
+        });
+      });
+    }).reduce(function(p, c) {
+        return p.concat(c);
+    });
+  },
+
+  /**
+   * Load repo info from stack. Used if installed stack doesn't have upgrade
+   * info.
+   *
+   * @returns {$.Deferred}
+   * @method loadDefaultRepoInfo
+   */
+  loadDefaultRepoInfo: function() {
+    var nameVersionCombo = App.get('currentStackVersion').split('-');
+
+    return App.ajax.send({
+      name: 'cluster.load_repositories',
+      sender: this,
+      data: {
+          stackName: nameVersionCombo[0],
+          stackVersion: nameVersionCombo[1]
+      },
+      success: 'loadDefaultRepoInfoSuccessCallback',
+      error: 'loadRepoInfoErrorCallback'
+    });
+  },
+
+  /**
+   * @param {Object}
+   *            data - JSON data from server
+   * @method loadDefaultRepoInfoSuccessCallback
+   */
+  loadDefaultRepoInfoSuccessCallback: function(data) {
+    this.allRepos = this.generateAllReposForAddhost(Em.getWithDefault(data, 'items', []));
+  },
+
+  /**
+   * @param {object}
+   *            request
+   * @method loadRepoInfoErrorCallback
+   */
+  loadRepoInfoErrorCallback: function(request, ajaxOptions, error, opt, params) {
+    this.allRepos = [];
+    console.log("In loadRepoInfoErrorCallback");
+    params.dfd.reject();
+  },
+
+  getSupportedOSList : function() {
+    var dfd = $.Deferred();
+    var isInstaller = this.get('content.controllerName') == 'installerController';
+    var version_definition_id;
+    if (isInstaller) {
+      version_definition_id = App.Stack.find().findProperty('isSelected',true).get('id');
+    } else {
+      var stackName = App.get('currentStackName');
+      var stackVersion = App.get('currentStackVersionNumber');
+      var stackId = App.StackVersion.find().filterProperty('stack', stackName).findProperty('version', stackVersion).get('repositoryVersion.displayName').split('-')[1];
+      if (stackVersion == stackId) {//check for default stack
+        version_definition_id = stackName + "-" + stackId;
+      } else {
+        version_definition_id = stackName + "-" + stackVersion + "-" + stackId;
+      }
+    }
+    App.ajax.send({
+      name : 'wizard.get_version_definition',
+      sender : this,
+      data : {
+        version_definition_id : version_definition_id,
+        dfd : dfd
+      },
+      success : 'getSupportedOSListSuccessCallback',
+    });
+    return dfd.promise();
+  },
+
+  /**
+   * onSuccess callback for getSupportedOSList.
+   */
+  getSupportedOSListSuccessCallback : function(data, opt, params) {
+    this.allSupportedOSList = data;
+    params.dfd.resolve(data);
+  },
+
+  checkRepoForNewOsType : function() {
+    var hosts = this.get('bootHosts').filterProperty('bootStatus',"REGISTERED");
+    var newOsTypes = []
+    var newSupportedOsList = Em.A([]);
+    hosts.forEach(function(_host) {
+      var checkHost = this.jsonHostData.items.findProperty('Hosts.host_name', _host.name);
+      var found = false;
+      for (var i = 0; i < this.allRepos.length; i++) {
+        if (checkHost.Hosts.os_type.contains(this.allRepos[i].os_type)) {
+          found = true;
+          break;
+        }
+      }
+      if (!found) {
+        this.set('promptRepoInfo', true);
+        newOsTypes.push(checkHost.Hosts.os_type);
+      }
+    }, this);
+
+    if (this.get('promptRepoInfo')) {
+      this.allSupportedOSList.operating_systems.forEach(function(os) {
+        if (newOsTypes.indexOf(os.OperatingSystems.os_type) != -1) {
+          var os_tmp = {
+            "os_type" : os.OperatingSystems.os_type,
+            "repositories" : []
+          };
+          os.repositories.forEach(function(repository) {
+            repository.Repositories.validation = "";
+            repository.Repositories.errorTitle= "";
+            repository.Repositories.errorContent = "";
+            repository.Repositories.last_base_url = "";
+			repository.Repositories.latest_base_url = repository.Repositories.base_url;
+            os_tmp.repositories.pushObject(repository.Repositories);
+          }, this);
+          newSupportedOsList.pushObject(os_tmp);
+        }
+      }, this);
+    }
+    this.set('newSupportedOsList',newSupportedOsList);
+    if (!this.newSupportedOsList.length) {
+      this.set('promptRepoInfo', false);
+    }
+  },
+
+  /**
+   * This will return the list of repositories
+   * when called by method editLocalRepository
+   */
+  repositories: function () {
+    var repositories = [];
+      if(this.newSupportedOsList){
+        this.newSupportedOsList.forEach(function (os) {
+          os.repositories.forEach(function(repo) {
+            repositories.pushObject(repo);
+          }, this);
+        }, this);
+      }
+    return repositories;
+  }.property('newSupportedOsList.@each.repositories'),
+
+  /**
+   * Handler when editing any repo BaseUrl on Step 3
+   *
+   * @method editLocalRepository
+   */
+  editLocalRepository: function () {
+    var repositories = this.get('repositories');
+    if (!repositories) {
+      return;
+    }
+    repositories.forEach(function (repository) {
+      if (repository.last_base_url !== repository.base_url) {
+        Em.set(repository, 'last_base_url', repository.base_url);
+        Em.set(repository, 'validation', App.Repository.validation.PENDING);
+        Em.set(repository, 'invalidFormatError', !this.isValidBaseUrl(repository.base_url));
+        if (!repository.base_url){
+          Em.set(repository, 'invalidFormatError', true);
+        }
+      }
+    }, this);
+  }.observes('repositories.@each.base_url'),
+
+    /**
+     * Validate base URL
+     * @param {string} value
+     * @returns {boolean}
+     */
+  isValidBaseUrl: function (value) {
+    var remotePattern = /^$|^(?:(?:https?|ftp):\/{2})(?:\S+(?::\S*)?@)?(?:(?:(?:[\w\-.]))*)(?::[0-9]+)?(?:\/\S*)?$/,
+    localPattern = /^$|^file:\/{2,3}([a-zA-Z][:|]\/){0,1}[\w~!*'();@&=\/\\\-+$,?%#.\[\]]+$/;
+    return remotePattern.test(value) || localPattern.test(value);
+  },
+
+  invalidFormatUrlExist: function () {
+    var repositories = this.get('repositories');
+    if (!repositories) {
+      return false;
+    }
+    return repositories.someProperty('invalidFormatError', true);
+  }.property('repositories.@each.invalidFormatError'),
+
+  onNetworkIssuesExist: function() {
+    if (this.get('networkIssuesExist')) {
+      this.set('isPublicRepo',false);
+      this.set('isLocalRepo',true);
+      this.newSupportedOsList.forEach(function (os) {
+        os.repositories.forEach(function (repo) {
+          Em.set(repo.Repositories,'base_url','');
+        });
+      });
+    }
+  }.observes('networkIssuesExist'),
+
+  /**
+   * Restore base urls for selected stack when user select to use public
+   * repository
+   */
+  usePublicRepo : function() {
+    this.set('isPublicRepo', true);
+    this.set('isLocalRepo', false);
+    this.newSupportedOsList.forEach(function(repo) {
+      repo.repositories.forEach(function(repos) {
+        Em.set(repos, 'base_url', repos.latest_base_url);
+      }, this);
+    }, this);
+  },
+  /**
+   * Clean base urls for selected stack when user select to use local
+   * repository
+   */
+  useLocalRepo : function() {
+    this.set('isPublicRepo', false);
+    this.set('isLocalRepo', true);
+    this.newSupportedOsList.forEach(function(repo) {
+      repo.repositories.forEach(function(repos) {
+        Em.set(repos, 'base_url', '');
+        Em.set(repos, 'last_base_url', '');
+      }, this);
+    }, this);
+  },
+
+  /**
+   * Start of the validation code for both installer and Add host flow
+   */
+  validateRepoUrls : function() {
+    var dfd = $.Deferred();
+    this.set('repoValidationFailure', false);
+    var self = this;
+    this.validateRepo().done(
+      function(data) {
+        if (self.get('content.controllerName') !== 'installerController'
+            && !self.get('repoValidationFailure')) {
+          console.log("save repo url");
+          self.saveRepoUrl();
+        }
+        dfd.resolve();
+      });
+    return dfd.promise();
+  },
+
+  /**
+   * Perform actual validation for both installer and Add host flow
+   */
+  validateRepo : function() {
+    var isInstaller = this.get('content.controllerName') == 'installerController';
+    var verifyBaseUrl = !this.get('skipValidationChecked');
+    this.set('validationCnt', 0);
+
+    // populate stack info
+    var stackName = App.get('currentStackName');
+    var stackVersion = App.get('currentStackVersionNumber');
+
+    var dfd = $.Deferred();
+    if (isInstaller &&!verifyBaseUrl) {
+      dfd.resolve();
+    }
+
+    this.newSupportedOsList.forEach(function(os) {
+      this.set('validationCnt', os.repositories.length);
+      os.repositories.forEach(function(repo) {
+        if (isInstaller) {
+          var stackId = App.Stack.find().findProperty('isSelected').get('id');
+          var osToAdd = App.OperatingSystem.find().findProperty('osType', os.os_type);
+          App.ajax.send({
+            name : 'wizard.advanced_repositories.valid_url',
+            sender : this,
+            data : {
+              stackName : stackName,
+              stackVersion : stackVersion,
+              repoId : repo.repo_id,
+              osType : os.os_type,
+              osId : stackId + "-" + os.os_type,
+              dfd : dfd,
+              data : {
+                'Repositories' : {
+                  'base_url' : repo.base_url,
+                  "verify_base_url" : verifyBaseUrl
+                }
+              }
+            },
+            success : 'checkRepoURLSuccessCallback',
+            error : 'checkRepoURLErrorCallback'
+          });
+        } else {
+          if (verifyBaseUrl) {
+            App.ajax.send({
+              name : 'admin.stack_versions.validate.repo',
+              sender : this,
+              data : {
+                repoId : repo.repo_id,
+                baseUrl : repo.base_url,
+                osType : os.os_type,
+                stackName : stackName,
+                stackVersion : stackVersion,
+                dfd : dfd
+              },
+              success : 'checkRepoURLAddHostSuccessCallback',
+              error : 'checkRepoURLAddHostErrorCallback'
+            });
+          } else {
+            if (!this.newReposBaseURL[os.os_type]) {
+              this.newReposBaseURL[os.os_type] = {};
+            }
+            this.newReposBaseURL[os.os_type][repo.repo_id] = repo.base_url;
+            this.set('validationCnt', this.get('validationCnt') - 1);
+            if (!this.get('validationCnt')) {
+              dfd.resolve();
+            }
+          }
+        }
+      }, this);
+    }, this);
+    return dfd.promise();
+  },
+
+  /**
+   * onSuccess callback for check Repo URL.
+   */
+  checkRepoURLSuccessCallback : function(data, opt, params) {
+    //This method will be called 2 times for each repo
+    //update Operating System only once
+    if (params.repoId.indexOf("HDP-UTILS") !== -1) {
+      var oses = App.db.getOses();
+      oses.filter(function(os) {
+        return os.id == params.osId;
+      }).map(function(os){
+        os.is_selected = true;
+      });
+      App.db.setOses(oses);
+    }
+    var repos = App.db.getRepos();
+    repos.filter(function(repo) {
+      return repo.id == params.osId + '-' + params.repoId;
+    }).map(function(repo){
+      repo.base_url = params.data.Repositories.base_url;
+    });
+    App.db.setRepos(repos);
+
+    var os = this.get('newSupportedOsList').findProperty('os_type', params.osType);
+    var repo = os.repositories.findProperty('repo_id', params.repoId);
+    if (repo) {
+      Em.set(repo, 'validation', App.Repository.validation.OK);
+    }
+
+    this.set('validationCnt', this.get('validationCnt') - 1);
+    if (!this.get('validationCnt')) {
+      this.set('content.isCheckInProgress', false);
+      params.dfd.resolve();
+    }
+  },
+
+  /**
+   * onError callback for check Repo URL.
+   */
+  checkRepoURLErrorCallback : function(request, ajaxOptions, error, data, params) {
+    var os=this.get('newSupportedOsList').findProperty('os_type',params.osType);
+    var repo = os.repositories.findProperty('repo_id',params.repoId);
+    if (repo) {
+      Em.set(repo,'validation', App.Repository.validation.INVALID);
+      Em.set(repo,'errorTitle', request.status + ":" + request.statusText);
+      Em.set(repo,'errorContent', $.parseJSON(request.responseText) ? $.parseJSON(request.responseText).message : "");
+    }
+    this.set('repoValidationFailure', true);
+    this.set('content.isCheckInProgress', false);
+    params.dfd.reject();
+  },
+
+
+  checkRepoURLAddHostSuccessCallback : function(data, opt, params) {
+    if (!this.newReposBaseURL[params.osType]) {
+      this.newReposBaseURL[params.osType] = {};
+    }
+    this.newReposBaseURL[params.osType][params.repoId] = params.baseUrl;
+
+    var os = this.get('newSupportedOsList').findProperty('os_type', params.osType);
+    var repo = os.repositories.findProperty('repo_id', params.repoId);
+    if (repo) {
+      Em.set(repo, 'validation', App.Repository.validation.OK);
+    }
+
+    this.set('validationCnt', this.get('validationCnt') - 1);
+    if (!this.get('validationCnt')) {
+      this.set('content.isCheckInProgress', false);
+      params.dfd.resolve();
+    }
+  },
+
+  checkRepoURLAddHostErrorCallback : function(request, ajaxOptions, error, opt, params) {
+    var os=this.get('newSupportedOsList').findProperty('os_type',params.osType);
+    var repo = os.repositories.findProperty('repo_id',params.repoId);
+    if (repo) {
+      Em.set(repo,'validation', App.Repository.validation.INVALID);
+      Em.set(repo,'errorTitle', request.status + ":" + request.statusText);
+      Em.set(repo,'errorContent', $.parseJSON(request.responseText) ? $.parseJSON(request.responseText).message : "");
+    }
+
+    this.set('repoValidationFailure', true);
+    params.dfd.reject();
+  },
+
+  saveRepoUrl : function() {
+    var repoVersionToSave = {
+      "operating_systems" : []
+    };
+
+    this.localRepoVersion.operating_systems.forEach(function(operating_system) {
+      var osToAdd = this.prepareOSForSaving(operating_system);
+      repoVersionToSave.operating_systems.push(osToAdd);
+    }, this);
+
+    this.allSupportedOSList.operating_systems.forEach(function(os) {
+      for (var os_type in this.newReposBaseURL) {
+        if (os.OperatingSystems.os_type == os_type) {
+          var base_urls = this.newReposBaseURL[os_type];
+          var osToAdd = {
+            "OperatingSystems" : {
+              "os_type" : os_type,
+              "ambari_managed_repositories" : true
+            },
+            "repositories" :
+              [{
+                "Repositories" : {
+                  "base_url" : base_urls[os.repositories[0].Repositories.repo_id],
+                  "repo_id" : os.repositories[0].Repositories.repo_id,
+                  "repo_name" : os.repositories[0].Repositories.repo_name
+                }
+              },{
+                "Repositories" : {
+                  "base_url" : base_urls[os.repositories[1].Repositories.repo_id],
+                  "repo_id" : os.repositories[1].Repositories.repo_id,
+                  "repo_name" : os.repositories[1].Repositories.repo_name
+                }
+              }]
+          };
+          repoVersionToSave.operating_systems.push(osToAdd);
+        }
+      }
+    }, this);
+    this.updateRepoOSInfo(repoVersionToSave);
+  },
+
+  prepareOSForSaving : function(os) {
+    var returnValue = {
+      "OperatingSystems" : {
+        "os_type" : os.OperatingSystems.os_type,
+        "ambari_managed_repositories" : true
+      },
+      "repositories" : []
+    };
+    os.repositories.forEach(function(repo) {
+      returnValue.repositories.push({
+        "Repositories" : {
+          "base_url" : repo.Repositories.base_url,
+          "repo_id" : repo.Repositories.repo_id,
+          "repo_name" : repo.Repositories.repo_name
+        }
+      });
+    });
+    return returnValue;
+  },
+
+  updateRepoOSInfo : function(repoVersionToSave) {
+    var stackName = App.get('currentStackName');
+    var stackVersion = App.get('currentStackVersionNumber');
+    var repoVersionId = App.StackVersion.find().filterProperty('stack', stackName).findProperty('version', stackVersion).get('repositoryVersion.id');
+
+    return App.ajax.send({
+      name : 'admin.stack_versions.edit.repo',
+      sender : this,
+      data : {
+        stackName : stackName,
+        stackVersion : stackVersion,
+        repoVersionId : repoVersionId,
+        repoVersion : repoVersionToSave
+      }
+    });
   },
 
   getHostNameResolution: function () {
@@ -2242,4 +2984,6 @@ hasJavaPpcError: false,
   }
 
 });
+
+
 

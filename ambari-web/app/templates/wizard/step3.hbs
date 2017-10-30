@@ -150,25 +150,124 @@
     </div>
   {{/unless}}
 
-{{#if hasJavaPpcError}}
-  <div class="controls">     
-    <h5>Following Power hosts were added:</h5>
-    <p>
-    {{#each ppcList }}
-            {{this}}
-    {{/each}}
-    </p>
-    <h5>Please enter a valid JDK path for all the Power hosts:</h5>
-    
-     <div  {{bindAttr class="view.onError:error"}}>
-        {{view App.WizardStep03JavaHome  id="java.home" valueBinding="ppcjavahome"   target="controller" }}
-     
-    <button type="button" class="btn" {{bindAttr disabled="isJavaPpcEntered"}} {{action getPpcJavaHomeInfo  target="controller"}}>Validate</button>
-   </div>
-  <div><p class="help-inline">{{ppcJavaNameError}}</p></div>
-  </div>
+  {{#if hasJavaPpcError}}
+    <div class="controls">
+      <h5>Following Power hosts were added:</h5>
+      <p>
+      {{#each ppcList }}
+        {{this}}
+      {{/each}}
+      </p>
+      <h5>Please enter a valid JDK path for all the Power hosts:</h5>
+      <div  {{bindAttr class="view.onError:error"}}>
+        {{view Ember.TextField valueBinding="uiJavaHomePpc"}}
+        <button type="button" class="btn" {{action getPpcJavaHomeInfo target="controller"}}>Validate</button>
+      </div>
+      <div><p class="help-inline">{{ppcJavaNameError}}</p></div>
+    </div>
   {{/if}}
 
+  {{#if promptAmbariRepoUrl}}
+    <div class="accordion-group repos-panel">
+      <div class="accordion-heading"> <p>Ambari Repositories </div>
+      <div class="controls">
+        <div class="alert alert-info">
+          {{t ambari.repository.url.list.hosts}}
+              {{#each newAmbariOsTypeHosts }}
+                <strong>{{this}}</strong></br>
+              {{/each}}
+        </div>
+        <label>{{t ambari.repository.url.os.textbox}}</label>
+        <div class="row-fluid">
+          <div class="span3"><strong>{{t common.os}}</strong></div>
+          <div class="span5"><strong>{{t ambari.repository.baseUrl}}</strong></div>
+        </div>
+        {{#each os in newAmbariOsTypes}}
+          <div class="row-fluid">
+            <div class="span3"><label><strong> {{os.os_type }} </strong></label></div>
+            <div  class="span5" {{bindAttr class="os.hasError:error"}}>
+              {{view Ember.TextField valueBinding="os.ambari_repo" }}
+            </div>
+            <div class="span4"><p class="help-inline">{{os.ambariRepoUIError}}</p></div>
+          </div>
+        {{/each}}
+        <div class="btn-area">
+          <button type="button" class="btn" {{action getAmbariRepoUrlInfo target="controller"}}>Validate</button>
+       </div>
+      </div>
+    </div>
+  {{/if}}
+
+  {{#if promptRepoInfo}}
+    <div class="accordion-group repos-panel">
+      <div class="accordion-heading">
+        <p>{{t common.repositories}}</p>
+      </div>
+      <div class="accordion-body version-contents-body">
+        <div class="accordion-inner">
+          {{! Public Repository radio }}
+            <label {{bindAttr class=":radio :big-radio :public-radio"}}>
+            {{view view.usePublicRepoRadioButton}} {{t installer.step1.selectUseRepoOptions.public}}
+              {{#if networkIssuesExist}}
+                <a id="public-disabled-link" {{action "openPublicOptionDisabledWindow" target="view"}}>{{t installer.step1.selectUseRepoOptions.public.networkLost}}</a>
+              {{/if}}
+            </label>
+          {{! Public Repository radio END }}
+
+          {{!--Local repo loaded info below--}}
+          <label class="radio big-radio">{{view view.useLocalRepoRadioButton}} {{t installer.step1.selectUseRepoOptions.local}}</label>
+          <div class="alert alert-info">
+            {{t installer.step1.useLocalRepo.infoForm.alert.baseUrl}}
+          </div>
+          {{#if controller.repoValidationFailure}}
+            <div {{bindAttr class="controller.serverValidationFailed::hidden :alert :alert-warning"}}>
+              {{t admin.stackVersions.editRepositories.validation.warning}}
+            </div>
+          {{/if}}
+          <div class="row-fluid">
+            <div class="span2"><strong>{{t common.os}}</strong></div>
+            <div class="span10 row-fluid">
+              <div class="span5"><strong>{{t common.name}}</strong></div>
+              <div class="span5"><strong>{{t admin.cluster.repositories.baseUrl}}</strong></div>
+            </div>
+          </div>
+          {{#each operatingSystem in controller.newSupportedOsList}}
+            <div class="row-fluid os-block" {{bindAttr id="os.osType"}}>
+              <div class="span2">  <label><strong>{{operatingSystem.os_type }}</strong></label>  </div>
+              <div class="span10">
+                {{#each repository in operatingSystem.repositories}}
+                  <div {{bindAttr class="repository.repoName :row-fluid"}}>
+                    <div class="span3 span3">
+                      <label class="repo-name-label control-label"> {{repository.repo_id}} </label>
+                    </div>
+                    <div class="validation-td span1">
+                      {{#if repository.validation}}
+                        {{view view.popoverView repositoryBinding="repository" }}
+                      {{/if}}
+                    </div>
+                    <div class="span9 span8">
+                      {{view App.WizardStep3ViewRepoUrlInput  valueBinding="repository.base_url" }}
+                    </div>
+                  </div>
+                {{/each}}
+              </div>
+            </div>
+          {{/each}}
+
+          {{! Skip Repository Base URL validation }}
+          <div id="skip-validation" {{bindAttr class="controller.selectedStack.useRedhatSatellite:disabled"}}>
+          <label>
+            {{view Ember.Checkbox checkedBinding="skipValidationChecked" disabledBinding="controller.selectedStack.useRedhatSatellite" class="checkbox"}}
+            <span {{bindAttr class="controller.selectedStack.useRedhatSatellite:disabled"}}>{{t installer.step1.advancedRepo.skipValidation.message}}</span>
+            <i class="icon-question-sign" rel="skip-validation-tooltip"
+              data-toggle="tooltip" {{translateAttr title="installer.step1.advancedRepo.skipValidation.tooltip"}}>
+            </i>
+          </label>
+          </div>
+        </div>
+      </div>
+    </div>
+  {{/if}}
 
   <div class="btn-area">
     <button type="button" class="btn pull-left installer-back-btn" {{bindAttr disabled="isBackButtonDisabled"}} {{action back}}>

@@ -128,33 +128,46 @@ module.exports = App.WizardRoute.extend({
   }),
 
   step2: App.StepRoute.extend({
-    route: '/step2',
-    connectOutlets: function (router) {
+    route : '/step2',
+    connectOutlets : function(router) {
       var controller = router.get('addHostController');
       controller.setCurrentStep('2');
       controller.dataLoading().done(function () {
-        controller.loadAllPriorSteps();
-        var wizardStep3Controller = router.get('wizardStep3Controller');
-        wizardStep3Controller.set('wizardController', controller);
-        controller.connectOutlet('wizardStep3', controller.get('content'));
-      });
+            controller.loadAllPriorSteps();
+            var wizardStep3Controller = router.get('wizardStep3Controller');
+            wizardStep3Controller.set('wizardController', controller);
+            controller.connectOutlet('wizardStep3', controller.get('content'));
+          });
     },
-    backTransition: function (router) {
+    backTransition : function(router) {
       router.transitionTo('step1');
     },
-    exit: function (router) {
+    exit : function(router) {
       router.get('wizardStep3Controller').set('stopBootstrap', true);
     },
-    nextTransition: function (router, context) {
+    nextTransition : function(router, context) {
       var addHostController = router.get('addHostController');
       var wizardStep3Controller = router.get('wizardStep3Controller');
+      App.set('router.nextBtnClickInProgress', false);
+      if (wizardStep3Controller.promptRepoInfo) {
+        self = this;
+        wizardStep3Controller.validateRepoUrls().done(function() {
+          if (!wizardStep3Controller.repoValidationFailure) {
+            self._transitionToStep3(router, wizardStep3Controller, addHostController);
+          }
+        });
+      } else {
+        this._transitionToStep3(router, wizardStep3Controller, addHostController);
+      }
+    },
+    _transitionToStep3 : function(router, wizard, addHost) {
+      App.set('router.nextBtnClickInProgress', true);
       var wizardStep6Controller = router.get('wizardStep6Controller');
-      addHostController.saveConfirmedHosts(wizardStep3Controller);
-      addHostController.saveClients();
-
-      addHostController.setDBProperties({
-        bootStatus: true,
-        slaveComponentHosts: undefined
+      addHost.saveConfirmedHosts(wizard);
+      addHost.saveClients();
+      addHost.setDBProperties({
+        bootStatus : true,
+        slaveComponentHosts : undefined
       });
       wizardStep6Controller.set('isClientsSet', false);
       router.transitionTo('step3');
@@ -165,7 +178,7 @@ module.exports = App.WizardRoute.extend({
      * @param router
      * @param context Array of hosts to delete
      */
-    removeHosts: function (router, context) {
+    removeHosts : function(router, context) {
       var controller = router.get('addHostController');
       controller.removeHosts(context);
     }

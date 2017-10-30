@@ -2258,6 +2258,9 @@ var urls = {
     'real': '/stacks/{stackName}/versions?fields=Versions,operating_systems/repositories/Repositories',
     'mock': '/data/wizard/stack/{stackName}_versions.json'
   },
+  'wizard.get_version_definition': {
+    'real': '/version_definitions/{version_definition_id}?fields=operating_systems/repositories/Repositories/*',
+  },
 
   'wizard.stacks_versions_definitions': {
     'real': '/version_definitions?fields=VersionDefinition/stack_default,VersionDefinition/max_jdk,VersionDefinition/min_jdk,operating_systems/repositories/Repositories/*,operating_systems/OperatingSystems/*,VersionDefinition/stack_services,VersionDefinition/repository_version' +

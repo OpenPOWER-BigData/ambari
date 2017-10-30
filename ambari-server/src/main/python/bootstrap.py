@@ -33,10 +33,12 @@ import subprocess
 import threading
 import traceback
 import re
+import ConfigParser
+import json
 from datetime import datetime
 from ambari_commons import OSCheck, OSConst
 from ambari_commons.os_family_impl import OsFamilyFuncImpl, OsFamilyImpl
-from ambari_server.serverConfiguration import get_ambari_properties, update_properties, JAVA_HOME_PPC_PROPERTY
+from ambari_server.serverConfiguration import get_ambari_properties, update_properties, JAVA_HOME_PPC_PROPERTY, AMBARI_REPO
 
 if OSCheck.is_windows_family():
   from ambari_commons.os_utils import run_os_command, run_in_shell
@@ -531,13 +533,57 @@ class BootstrapDefault(Bootstrap):
   def getRepoFileChmodCommand(self):
     return "{0} chmod 644 {1}".format(AMBARI_SUDO, self.getRepoFile())
 
-
-  def copyNeededFiles(self):
-    # get the params
+  def createTempRepoFile(self,agentInfo):
+    self.host_log.write("==========================\n")
+    self.host_log.write("Copying repo file to 'tmp' folder on server...")
     params = self.shared_state
 
-    # Copying the files
+    ambariRepoUrl = agentInfo['ambari_repo']
+
+    #store ambari repo url in ambari.properties
+    properties = get_ambari_properties()
+    properties.process_pair(AMBARI_REPO+'.'+agentInfo['os_type'], ambariRepoUrl)
+    update_properties(properties)
+
     fileToCopy = self.getRepoFile()
+    target = self.getRemoteName(agentInfo['os_type'])
+
+    #create directory based on os_type
+    subprocess.Popen(["mkdir", target], stdout=subprocess.PIPE)
+    subprocess.call(['chmod', '-R' , '777', target])
+    target = target+"/"+self.AMBARI_REPO_FILENAME
+
+    #copy repo file to created directory
+    subprocess.Popen(["cp", fileToCopy, target], stdout=subprocess.PIPE)
+    subprocess.call(['chmod', '-R' , '777', target])
+
+    #update base url in repo file
+    config = ConfigParser.RawConfigParser()
+    config.read(target)
+    baseurl = config.get(config.sections()[0],'baseurl')
+    subprocess.call(['sed', '-i', '-e', 's,'+baseurl+','+ambariRepoUrl+',g', target])
+    return target
+
+  def copyNeededFiles(self):
+    #get the params
+    params = self.shared_state
+
+
+    #Copying the files
+    if params.ambariRepoUrls != "null":
+      ambariRepoUrls = json.loads(params.ambariRepoUrls)
+      agentInfo = next((info for info in ambariRepoUrls if info['os_type'] == agent_os_type), None)
+      if agentInfo:
+        fileToCopy = self.createTempRepoFile(agentInfo)
+      else:
+        fileToCopy = self.getRepoFile()
+    else:
+      properties = get_ambari_properties()
+      if properties[AMBARI_REPO+'.'+agent_os_type]:
+        agentInfo = {'os_type': agent_os_type, 'ambari_repo': properties[AMBARI_REPO+'.'+agent_os_type]}
+        fileToCopy = self.createTempRepoFile(agentInfo)
+      else:
+        fileToCopy = self.getRepoFile()
     target = self.getRemoteName(self.AMBARI_REPO_FILENAME)
 
     if (os.path.exists(fileToCopy)):
@@ -546,32 +592,6 @@ class BootstrapDefault(Bootstrap):
       scp = SCP(params.user, params.sshPort, params.sshkey_file, self.host, fileToCopy,
                 target, params.bootdir, self.host_log)
       retcode1 = scp.run()
-
-      # TODO : Pick up correct Ambari repo from User Input?
-      # hybrid (ppc) code goes here
-      # need to edit the repo file if os arch is ppc
-      command_ppc = "{0} uname -m".format(AMBARI_SUDO)
-      ssh = SSH(params.user, params.sshPort, params.sshkey_file, self.host, command_ppc,
-                params.bootdir, self.host_log)
-      retcode1 = ssh.run()
-      ret_value = retcode1['log']
-
-      if ret_value.startswith("ppc"):
-        self.host_log.write(".Found os arch as ppc.")
-
-        if params.cluster_os_type == "redhat7":
-          self.host_log.write(".Found os family as rhel.")
-			
-          # TODO : Hardcode for now; Pick up correct Ambari repo from User Input?
-          command_url = "{0} sed -i 's/centos7/centos7-ppc/g' {1}".format(AMBARI_SUDO, target)
-          ssh = SSH(params.user, params.sshPort, params.sshkey_file, self.host, command_url,
-                    params.bootdir, self.host_log)
-          retcode1 = ssh.run()
-        else:
-          self.host.log.write("only redhat with ppc is supported")
-          # TODO: we can block user or let it proceed further
-          #retcode1 = -1
-      # hybrid (ppc) code ends here
       self.host_log.write("\n")
 
       # Move file to repo dir
@@ -663,6 +683,52 @@ class BootstrapDefault(Bootstrap):
     ssh = SSH(params.user, params.sshPort, params.sshkey_file, self.host, command,
               params.bootdir, self.host_log)
     retcode = ssh.run()
+    self.host_log.write("\n")
+    return retcode
+
+  def copyCheckForOsTypeScript(self):
+    # Copying the os check script file
+    fileToCopy = os.path.join(self.shared_state.script_dir, "check_for_os_type.py")
+    target = self.getRemoteName("check_for_os_type.py")
+    params = self.shared_state
+    self.host_log.write("==========================\n")
+    self.host_log.write("Copying check for OS type script...")
+    scp = SCP(params.user, params.sshPort, params.sshkey_file, self.host, fileToCopy,
+              target, params.bootdir, self.host_log)
+    result = scp.run()
+    self.host_log.write("\n")
+    return result
+
+  def runCheckForOsTypeScript(self):
+    global agent_os_type
+    agent_os_type = ""
+    params = self.shared_state
+    self.host_log.write("==========================\n")
+    self.host_log.write("Running check for OS type...")
+
+    command = "chmod a+x %s && %s %s %s" % \
+              (self.getRemoteName("check_for_os_type.py"),
+               PYTHON_ENV, self.getRemoteName("check_for_os_type.py"), params.cluster_os_type)
+
+    ssh = SSH(params.user, params.sshPort, params.sshkey_file, self.host, command,
+              params.bootdir, self.host_log)
+    retcode = ssh.run()
+
+    properties = get_ambari_properties()
+    agent_os_type = retcode['log'].split()[11]
+    if retcode['exitstatus'] == 1:
+      if params.ambariRepoUrls == "null":
+        if not properties[AMBARI_REPO+'.'+agent_os_type]:
+          retcode['exitstatus'] = 404
+        else:
+          retcode['exitstatus'] = 0
+      else:
+        ambariRepoUrls = json.loads(params.ambariRepoUrls)
+        if not any(d['os_type'] == agent_os_type for d in ambariRepoUrls):
+          retcode['exitstatus'] = 404
+        else:
+          retcode['exitstatus'] = 0
+
     self.host_log.write("\n")
     return retcode
 
@@ -783,8 +849,10 @@ class BootstrapDefault(Bootstrap):
                     self.copyCommonFunctions,
                     self.copyCreatePythonWrapScript,
                     self.copyOsCheckScript,
+                    self.copyCheckForOsTypeScript,
                     self.runCreatePythonWrapScript,
                     self.runOsCheckScript,
+                    self.runCheckForOsTypeScript,
                     self.checkSudoPackage
     ]
     if self.hasPassword():
@@ -931,7 +999,7 @@ class PJavaHomeSetter:
 class SharedState:
   def __init__(self, user, sshPort, sshkey_file, script_dir, boottmpdir, setup_agent_file,
                ambari_server, cluster_os_type, ambari_version, server_port,
-               user_run_as, ppcJavaHome, password_file = None):
+               user_run_as, ppcJavaHome, ambariRepoUrls, password_file = None):
     self.hostlist_to_remove_password_file = None
     self.user = user
     self.sshPort = sshPort
@@ -947,6 +1015,7 @@ class SharedState:
     self.statuses = None
     self.server_port = server_port
     self.ppcJavaHome = ppcJavaHome
+    self.ambariRepoUrls = ambariRepoUrls
     self.remote_files = {}
     self.ret = {}
     pass
@@ -977,6 +1046,7 @@ def main(argv=None):
   user_run_as = onlyargs[10]
   passwordFile = onlyargs[11]
   ppcJavaHome= onlyargs[12]
+  ambariRepoUrls = onlyargs[13]
 
   if not OSCheck.is_windows_family():
     # ssh doesn't like open files
@@ -989,10 +1059,10 @@ def main(argv=None):
                " using " + scriptDir + " cluster primary OS: " + cluster_os_type +
                " with user '" + user + "'with ssh Port '" + sshPort + "' sshKey File " + sshkey_file + " password File " + passwordFile +\
                " using tmp dir " + bootdir + " ambari: " + ambariServer +"; server_port: " + server_port +\
-               "; ambari version: " + ambariVersion+"; user_run_as: " + user_run_as + " ppcJavaHome: " + ppcJavaHome)
+               "; ambari version: " + ambariVersion+"; user_run_as: " + user_run_as + " ppcJavaHome: " + ppcJavaHome + "ambariRepoUrls" + ambariRepoUrls)
   sharedState = SharedState(user, sshPort, sshkey_file, scriptDir, bootdir, setupAgentFile,
                        ambariServer, cluster_os_type, ambariVersion,
-                       server_port, user_run_as, ppcJavaHome, passwordFile)
+                       server_port, user_run_as, ppcJavaHome, ambariRepoUrls, passwordFile)
   pbootstrap = PBootstrap(hostList, sharedState)
   pbootstrap.run()
   return 0 # Hack to comply with current usage
