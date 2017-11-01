@@ -31,12 +31,10 @@ def main(argv=None):
   current_os_version = OSCheck.get_os_major_version()
   current_os = current_os_family + current_os_version
   # If agent/server have the same {"family","main_version"} - then ok.
-  print "Cluster primary/cluster OS family is %s and local/current OS family is %s" % (
-    cluster_os, current_os)
   if cluster_os == current_os:
     sys.exit(0)
   else:
-    #raise Exception("Local OS is not compatible with cluster primary OS family. Please perform manual bootstrap on this host.")
+    print current_os
     sys.exit(1)
 if __name__ == "__main__":
   main()

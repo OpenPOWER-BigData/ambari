@@ -249,7 +249,10 @@ class Bootstrap(threading.Thread):
     doneFilePath = os.path.join(params.bootdir, self.host + ".done")
     if not os.path.exists(doneFilePath):
       doneFile = open(doneFilePath, "w+")
-      doneFile.write(str(retcode))
+      if retcode == 44:
+        doneFile.write(str(retcode) + ":" + agent_os_type)
+      else:
+        doneFile.write(str(retcode))
       doneFile.close()
 
   def getStatus(self):
@@ -715,17 +718,19 @@ class BootstrapDefault(Bootstrap):
     retcode = ssh.run()
 
     properties = get_ambari_properties()
-    agent_os_type = retcode['log'].split()[11]
+    agent_os_type = retcode['log'].split()[0]
     if retcode['exitstatus'] == 1:
       if params.ambariRepoUrls == "null":
         if not properties[AMBARI_REPO+'.'+agent_os_type]:
-          retcode['exitstatus'] = 404
+          retcode['exitstatus'] = 44
+          self.host_log.write("Ambari Repo file not found for os_type "+agent_os_type)
         else:
           retcode['exitstatus'] = 0
       else:
         ambariRepoUrls = json.loads(params.ambariRepoUrls)
         if not any(d['os_type'] == agent_os_type for d in ambariRepoUrls):
-          retcode['exitstatus'] = 404
+          retcode['exitstatus'] = 44
+          self.host_log.write("Ambari Repo file not found for os_type "+agent_os_type)
         else:
           retcode['exitstatus'] = 0
 

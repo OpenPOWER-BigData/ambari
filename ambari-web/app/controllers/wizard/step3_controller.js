@@ -406,26 +406,29 @@ App.WizardStep3Controller = Em.Controller.extend(App.ReloadPopupMixin, {
         var ambariIndex = self.newAmbariOsTypeHosts.indexOf(_host.name);
         if (ambariIndex != -1) {
           self.newAmbariOsTypeHosts.removeAt(ambariIndex);
+          var ambariOsTypeIndex = self.newAmbariOsTypes.findIndex(os => os.hosts.contains(_host.name));
+          self.newAmbariOsTypes[ambariOsTypeIndex].hosts.removeObject(_host.name);
+          if (self.newAmbariOsTypes[ambariOsTypeIndex].hosts.length == 0){
+            self.newAmbariOsTypes.removeAt(ambariOsTypeIndex);
+          }
+          if (!self.newAmbariOsTypes.length) {
+            self.set('promptAmbariRepoUrl', false);
+          }
         }
         var hostIndex = self.hosts.findIndex(allHosts => allHosts.os_type === _host.os_type);
         if (hostIndex >= 0) {
           return;
         }
-        var index = self.newSupportedOsList.findIndex(os => os.os_type === _host.os_type);
-        if (index >= 0) {
-          self.newSupportedOsList.removeAt(index);
-        }
-        var ambariOsTypeIndex = self.newAmbariOsTypes.findIndex(diffOs => diffOs.os_type === _host.os_type);
-        if (ambariOsTypeIndex != -1) {
-          self.newAmbariOsTypes.removeAt(ambariOsTypeIndex);
+        if(self.newSupportedOsList){
+          var index = self.newSupportedOsList.findIndex(os => os.os_type === _host.os_type);
+          if (index >= 0) {
+            self.newSupportedOsList.removeAt(index);
+          }
+          if (!self.newSupportedOsList.length) {
+            self.set('promptRepoInfo', false);
+          }
         }
       }, self);
-      if (self.newSupportedOsList.length <= 0) {
-        self.set('promptRepoInfo', false);
-      }
-      if (!self.newAmbariOsTypes.length) {
-        self.set('promptAmbariRepoUrl', false);
-      }
       self.stopRegistration();
       if (!self.hosts.length) {
         self.set('isSubmitDisabled', true);
@@ -658,23 +661,28 @@ App.WizardStep3Controller = Em.Controller.extend(App.ReloadPopupMixin, {
       this.set('newAmbariOsTypes', []);
       this.set('newAmbariOsTypeHosts', []);
       this.set('promptAmbariRepoUrl', false);
-      if(!keepPolling && data.hostsStatus.someProperty('statusCode', "404")){
+      if(!keepPolling && data.hostsStatus.someProperty('statusCode', "44")){
         data.hostsStatus.forEach(function(host) {
-          if(host.statusCode == 404){
+          if(host.statusCode == 44){
             if (!this.newAmbariOsTypeHosts.contains(host.hostName)) {
               this.newAmbariOsTypeHosts.push(host.hostName);
             }
-            var warnedHost = this.jsonHostData.items.findProperty('Hosts.host_name', host.hostName);
-            if(!this.newAmbariOsTypes.someProperty('os_type',warnedHost.Hosts.os_type)){
+            if(!this.newAmbariOsTypes.someProperty('os_type',host.osType)){
               this.newAmbariOsTypes.push({
-                'os_type' : warnedHost.Hosts.os_type,
+                'os_type' : host.osType,
                 'ambari_repo' : "",
                 'ambariRepoUIError' : "",
-                'hasError' : false
-                });
-              }
+                'hasError' : false,
+                'hosts' : []
+              });
+              var ambariOsTypeIndex = this.newAmbariOsTypes.findIndex(diffOs => diffOs.os_type === host.osType);
+              this.newAmbariOsTypes[ambariOsTypeIndex].hosts.push(host.hostName);			
+            } else {
+              var ambariOsTypeIndex = this.newAmbariOsTypes.findIndex(diffOs => diffOs.os_type === host.osType);
+              this.newAmbariOsTypes[ambariOsTypeIndex].hosts.push(host.hostName);
             }
-          },this);
+          }
+        },this);
         this.set('promptAmbariRepoUrl',true);
       }
       if (isErrorStatus || data.hostsStatus.mapProperty('hostName').removeObjects(installedHosts).length != this.get('bootHosts').length) {
@@ -1206,8 +1214,11 @@ App.WizardStep3Controller = Em.Controller.extend(App.ReloadPopupMixin, {
     if (!hosts.everyProperty('bootStatus', 'FAILED')) {
       this.set('isWarningsLoaded', false);
       this.getHostNameResolution();
-      this.checkHostJDK();
-      this.doCheckRepoInfo();
+      var self = this;
+      this.getHostOsInfo().done(function(){
+        self.checkHostJDK();
+        self.doCheckRepoInfo();
+      },self);
     } else {
       this.stopHostCheck();
     }
