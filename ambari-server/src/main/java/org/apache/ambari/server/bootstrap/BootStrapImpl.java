@@ -128,7 +128,7 @@ public class BootStrapImpl {
     } else {
       bsRunner = new BSRunner(this, info, bootStrapDir.toString(),
           bootScript, bootSetupAgentScript, bootSetupAgentPassword, requestId, 0L,
-          this.masterHostname, info.isVerbose(), this.clusterOsFamily, this.projectVersion, this.serverPort);
+          this.masterHostname, info.isVerbose(), this.clusterOsFamily, this.projectVersion, this.serverPort, info.getPpcJavaHome());
       bsRunner.start();
       response.setStatus(BSRunStat.OK);
       response.setLog("Running Bootstrap now.");

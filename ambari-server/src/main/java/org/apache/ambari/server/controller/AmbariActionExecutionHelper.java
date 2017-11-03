@@ -27,6 +27,7 @@ import static org.apache.ambari.server.agent.ExecutionCommand.KeyNames.SCRIPT;
 import static org.apache.ambari.server.agent.ExecutionCommand.KeyNames.SCRIPT_TYPE;
 import static org.apache.ambari.server.agent.ExecutionCommand.KeyNames.STACK_NAME;
 import static org.apache.ambari.server.agent.ExecutionCommand.KeyNames.STACK_VERSION;
+import static org.apache.ambari.server.agent.ExecutionCommand.KeyNames.JAVA_HOME;
 
 import java.util.HashSet;
 import java.util.List;
@@ -452,6 +453,18 @@ public class AmbariActionExecutionHelper {
         resourceFilter.getComponentName() : componentName);
 
       Map<String, String> hostLevelParams = execCmd.getHostLevelParams();
+
+      String osArch = clusters.getHost(hostName).getOsArch();
+      String javaHomeValue = null;
+      if (osArch.startsWith("ppc")) {
+        String key = "java.home.ppc";
+        javaHomeValue = configs.getPropertyForced(key);
+      } else {
+        javaHomeValue = configs.getJavaHome();
+      }
+      commandParams.put(JAVA_HOME, javaHomeValue);
+      hostLevelParams.put(JAVA_HOME, javaHomeValue);
+
       hostLevelParams.put(AGENT_STACK_RETRY_ON_UNAVAILABILITY, configs.isAgentStackRetryOnInstallEnabled());
       hostLevelParams.put(AGENT_STACK_RETRY_COUNT, configs.getAgentStackRetryOnInstallCount());
       for (Map.Entry<String, String> dbConnectorName : configs.getDatabaseConnectorNames().entrySet()) {

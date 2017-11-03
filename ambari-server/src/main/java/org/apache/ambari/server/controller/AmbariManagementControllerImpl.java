@@ -40,6 +40,7 @@ import static org.apache.ambari.server.agent.ExecutionCommand.KeyNames.UNLIMITED
 import static org.apache.ambari.server.agent.ExecutionCommand.KeyNames.USER_GROUPS;
 import static org.apache.ambari.server.agent.ExecutionCommand.KeyNames.USER_LIST;
 import static org.apache.ambari.server.controller.AmbariCustomCommandExecutionHelper.masterToSlaveMappingForDecom;
+import static org.apache.ambari.server.agent.ExecutionCommand.KeyNames.JAVA_HOME;
 
 import java.io.File;
 import java.io.FileNotFoundException;
@@ -2530,6 +2531,15 @@ public class AmbariManagementControllerImpl implements AmbariManagementControlle
     // Set/update the unlimited_key_jce_required value as needed
     hostParams.put(UNLIMITED_KEY_JCE_REQUIRED, (unlimitedKeyJCEPolicyRequired) ? "true" : "false");
 
+    String osArch = host.getOsArch();
+    String javaHomeValue = null;
+    if (osArch.startsWith("ppc")) {
+      String key = "java.home.ppc";
+      javaHomeValue = configs.getPropertyForced(key);
+    } else {
+      javaHomeValue= configs.getJavaHome();
+    }
+    hostParams.put(JAVA_HOME, javaHomeValue);
     execCmd.setHostLevelParams(hostParams);
 
     Map<String, String> roleParams = new TreeMap<>();

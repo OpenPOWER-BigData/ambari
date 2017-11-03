@@ -57,6 +57,12 @@ public class SshHostInfo {
   @XmlElement
   private String userRunAs;
 
+  @XmlElement
+  private String ppcJavaHome;
+
+  @XmlElement
+  private String ambariRepoUrls;
+
   public String getSshKey() {
     return sshKey;
   }
@@ -118,5 +124,20 @@ public class SshHostInfo {
       ret.append(host).append(":");
     }
     return ret.toString();
+  }
+  public String getPpcJavaHome() {
+    return ppcJavaHome;
+  }
+
+  public void setPpcJavaHome(String ppcJavaHome) {
+    this.ppcJavaHome = ppcJavaHome;
+  }
+
+  public String getAmbariRepoUrls() {
+    return ambariRepoUrls;
+  }
+
+  public void setAmbariRepoUrls(String ambariRepoUrls) {
+    this.ambariRepoUrls = ambariRepoUrls;
   }
 }

@@ -33,6 +33,15 @@ App.WizardStep3View = App.TableView.extend({
   }.property('controller.hosts.length'),
 
   /**
+   * Is some error with provided java path
+   * @type {bool}
+   */
+  onError: function () {
+    return !Em.isEmpty(this.get('controller.ppcJavaNameError'));
+  }.property('controller.ppcJavaNameError'),
+
+
+  /**
    * Message with info about registration result
    * @type {string}
    */
@@ -198,7 +207,46 @@ App.WizardStep3View = App.TableView.extend({
       category.set('hostsCount', counters[category.get('hostsBootStatus')]);
     }, this);
   },
+  /**
+   * Checkbox for use Public repo
+   */
+  usePublicRepoRadioButton: Em.Checkbox.extend({
+    tagName: 'input',
+    attributeBindings: [ 'type', 'checked' ],
+    classNames: [''],
+    checked: Em.computed.alias('controller.isPublicRepo'),
+    type: 'radio',
 
+    click: function () {
+      this.get('controller').usePublicRepo();
+    }
+  }),
+
+  /**
+   * Checkbox for use Local repo
+   *
+   */
+  useLocalRepoRadioButton: Em.Checkbox.extend({
+    tagName: 'input',
+    attributeBindings: [ 'type', 'checked' ],
+    classNames: [''],
+    checked: Em.computed.alias('controller.isLocalRepo'),
+    type: 'radio',
+
+    click: function () {
+      this.get('controller').useLocalRepo();
+    }
+  }),
+
+  openPublicOptionDisabledWindow: function () {
+    return App.ModalPopup.show({
+      header: Em.I18n.t('installer.step1.selectUseRepoOptions.public.networkLost.popup.title'),
+      bodyClass: Ember.View.extend({
+        templateName: require('templates/wizard/step1/public_option_disabled_window_body')
+      }),
+      secondary: false
+    });
+  },
 
   /**
    * Filter hosts by category
@@ -250,6 +298,19 @@ App.WizardStep3View = App.TableView.extend({
     this.selectCategory(eventObject);
     this.get('controller').retrySelectedHosts();
   },
+
+  /**
+   * Show corresponding error or success icon
+   * based on the validation
+   */
+  popoverView: Em.View.extend({
+    tagName: 'i',
+    classNameBindings: ['repository.validation'],
+    attributeBindings: ['repository.errorTitle:title', 'repository.errorContent:data-content'],
+    didInsertElement: function () {
+      App.popover($(this.get('element')), {'trigger': 'hover'});
+    }
+  }),
 
   /**
    * Update <code>status</code>, <code>linkText</code>, <code>message</code> according to hosts statuses
@@ -334,4 +395,42 @@ App.WizardHostView = Em.View.extend({
 
 });
 
+/**
+ * Field for Repo url
+ */
+App.WizardStep3ViewRepoUrlInput = Em.TextField.extend({
 
+  layout : Ember.Handlebars.compile('<div class="pull-left">{{yield}}</div> {{#if view.valueWasChanged}}<div class="pull-right"><a class="btn-small" {{action "restoreValue" target="view"}}><i class="icon-undo"></i></a></div>{{/if}}'),
+
+  /**
+   * Submit form if "Enter" pressed
+   */
+  keyPress : function(event) {
+    if (event.keyCode == 13) {
+      this.get('parentView.controller').submit();
+      return false;
+    }
+    return true;
+  },
+
+  defaultValue : '',
+
+  /**
+   * Determines if user have put some new value
+   */
+  valueWasChanged : function() {
+    return this.get('value') !== this.get('defaultValue');
+  }.property('value', 'defaultValue'),
+
+  didInsertElement : function() {
+    this.set('defaultValue', this.get('value'));
+  },
+
+  /**
+   * Restore value and unset error-flag
+   * @method restoreValue
+   */
+  restoreValue : function() {
+    this.set('value', this.get('defaultValue'));
+  }
+});
